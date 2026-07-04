@@ -2,7 +2,7 @@ name: Build and Release uiZip
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
