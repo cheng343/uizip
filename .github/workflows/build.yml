@@ -16,8 +16,13 @@ jobs:
         with:
           node-version: 22
 
-      - name: Setup Rust
+      - name: Setup Rust (MSVC)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-msvc
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
 
       - name: Install dependencies
         run: npm ci
