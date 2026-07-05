@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./theme";
 import { themeList, type ThemeId } from "./theme";
 import "./App.css";
@@ -181,8 +181,11 @@ export default function App() {
     return () => { un.then(f => f()).catch(() => {}); };
   }, []);
 
+    const extractPasswordRef = useRef(extractPassword);
+  useEffect(() => { extractPasswordRef.current = extractPassword; }, [extractPassword]);
+
   const loadArchive = useCallback(async (p: string, pw?: string) => {
-    const entries = await tauriListArchive(p, pw ?? (extractPassword || undefined));
+    const entries = await tauriListArchive(p, pw ?? (extractPasswordRef.current || undefined));
     setArchiveEntries(entries);
     setSelected(new Set());
     // 默认展开所有文件夹，方便浏览
@@ -190,10 +193,11 @@ export default function App() {
     for (const e of entries) { if (e.is_dir) dirs.add(e.name.replace(/\\/g, "/").replace(/\/+$/, "")); }
     buildTree(entries).forEach(function walk(n) { if (n.isDir) { dirs.add(n.full); n.children.forEach(walk); } });
     setExpanded(dirs);
-  }, [extractPassword]);
+  }, []);
 
   // ---- 统一处理拖入的路径 ----
-  const handlePaths = useCallback(async (paths: string[]) => {
+
+const handlePaths = useCallback(async (paths: string[]) => {
     if (!paths || paths.length === 0) return;
     if (paths.some(p => isArchive(p))) {
       const arch = paths.find(p => isArchive(p))!;
@@ -208,24 +212,27 @@ export default function App() {
     for (const p of paths) { const info = await fileInfo(p); newFiles.push({ id: nextId(), name: basename(p), path: p, size: info?.size ?? 0 }); }
     setMode("compress");
     setFiles(prev => { const exist = new Set(prev.map(f => f.path)); return [...prev, ...newFiles.filter(f => !exist.has(f.path))]; });
-  }, [loadArchive]);
+  }, []);
+
+    const handlePathsRef = useRef(handlePaths);
+  useEffect(() => { handlePathsRef.current = handlePaths; }, [handlePaths]);
 
   // ---- 原生拖放（Tauri v2；webview 的 HTML drop 被禁用） ----
   useEffect(() => {
     const un = getCurrentWebview().onDragDropEvent(ev => {
       if (ev.payload.type === "over") setDragover(true);
       else if (ev.payload.type === "leave") setDragover(false);
-      else if (ev.payload.type === "drop") { setDragover(false); handlePaths(ev.payload.paths); }
+      else if (ev.payload.type === "drop") { setDragover(false); handlePathsRef.current(ev.payload.paths); }
     });
     return () => { un.then(f => f()).catch(() => {}); };
-  }, [handlePaths]);
+  }, []);
 
   // ---- 文件关联/命令行启动：自动打开传入的压缩包 ----
   useEffect(() => {
-    (async () => { try { const p = await call("get_launch_archive") as string | null; if (p) handlePaths([p]); } catch { } })();
-    const un = listen<string>("open-archive", e => { if (e.payload) handlePaths([e.payload]); });
+    (async () => { try { const p = await call("get_launch_archive") as string | null; if (p) handlePathsRef.current([p]); } catch { } })();
+    const un = listen<string>("open-archive", e => { if (e.payload) handlePathsRef.current([e.payload]); });
     return () => { un.then(f => f()).catch(() => {}); };
-  }, [handlePaths]);
+  }, []);
 
   // ---- Compress helpers ----
   const addFiles = useCallback(async () => { const picked = await tauriPickFiles(); if (picked.length > 0) { setFiles(prev => { const exist = new Set(prev.map(f => f.path)); const fresh = picked.filter(f => !exist.has(f.path)); return [...prev, ...fresh.map(f => ({ id: nextId(), name: f.name, path: f.path, size: f.size }))]; }); } }, []);
@@ -255,7 +262,7 @@ export default function App() {
     const p = await tauriPickArchive(); if (!p) return;
     setArchivePath(p); setExtractDir(dirname(p) + "\\" + stripExt(basename(p))); setExtractDone(false); setExtractError("");
     await loadArchive(p);
-  }, [loadArchive]);
+  }, []);
   const pickExtractDir = useCallback(async () => { const d = await tauriPickFolder(); if (d) setExtractDir(d); }, []);
   const doExtract = useCallback(async () => {
     if (!archivePath || !extractDir) return;
