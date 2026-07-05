@@ -40,7 +40,6 @@
     "resources": [
       "resources/*"
     ],
-    "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
         "installMode": "currentUser",
@@ -52,6 +51,13 @@
           "English"
         ]
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": false,
+      "endpoints": [],
+      "pubkey": ""
     }
   }
 }
