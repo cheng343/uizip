@@ -30,7 +30,7 @@ const ARCHIVE_EXTS = [".zip", ".zip.001", ".7z", ".7z.001", ".rar", ".r00", ".ta
 function fmtSize(bytes: number): string { if (bytes < 1024) return bytes + " B"; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB"; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB"; return (bytes / 1073741824).toFixed(2) + " GB"; }
 function basename(p: string): string { const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return s === -1 ? p : p.slice(s + 1); }
 function dirname(p: string): string { const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return s === -1 ? "" : p.slice(0, s); }
-function stripExt(p: string): string { const d = p.lastIndexOf("."); if (d === -1) return p; const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return d > s ? p.slice(0, d) : p; }
+function stripExt(p: string): string { const b = basename(p); const known = ['.tar.gz','.tar.bz2','.tar.xz','.tar.zst','.tgz','.tbz2','.txz','.tzst']; for (const k of known) { if (b.endsWith(k)) return p.slice(0, p.length - k.length); } const d = p.lastIndexOf("."); if (d === -1) return p; const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return d > s ? p.slice(0, d) : p; }
 function rtrimBackslash(s: string): string { let i = s.length; while (i > 0 && (s.charCodeAt(i - 1) === 92 || s.charCodeAt(i - 1) === 47)) i--; return s.slice(0, i); }
 function isArchive(f: string): boolean { const low = f.toLowerCase(); for (const ext of ARCHIVE_EXTS) { if (low.endsWith(ext)) return true; } return false; }
 let uid = 0; const nextId = () => "f" + (++uid);
@@ -69,8 +69,8 @@ async function call(cmd: string, args?: Record<string, unknown>): Promise<unknow
 async function fileInfo(p: string): Promise<{ size: number; is_dir: boolean } | null> {
   try { return JSON.parse((await call("get_file_info", { path: p })) as string) as { size: number; is_dir: boolean }; } catch { return null; }
 }
-async function tauriPickFiles(): Promise<{ name: string; path: string; size: number }[]> { try { const selected = await dialogOpen({ multiple: true }); if (!selected) return []; const paths = Array.isArray(selected) ? selected : [selected]; const r: { name: string; path: string; size: number }[] = []; for (const p of paths) { const info = await fileInfo(p); if (info) r.push({ name: basename(p), path: p, size: info.size }); } return r; } catch { return []; } }
-async function tauriPickFolders(): Promise<{ name: string; path: string; size: number }[]> { try { const selected = await dialogOpen({ multiple: true, directory: true, title: '选择文件夹' }); if (!selected) return []; const paths = Array.isArray(selected) ? selected : [selected]; const r: { name: string; path: string; size: number }[] = []; for (const p of paths) { const info = await fileInfo(p); if (info) r.push({ name: basename(p), path: p, size: info.size }); } return r; } catch { return []; } }
+async function tauriPickFiles(): Promise<{ name: string; path: string; size: number }[]> { try { const selected = await dialogOpen({ multiple: true }); if (!selected) return []; const paths = Array.isArray(selected) ? selected : [selected]; const r: { name: string; path: string; size: number }[] = []; for (const p of paths) { const info = await fileInfo(p); r.push({ name: basename(p), path: p, size: info?.size ?? 0 }); } return r; } catch { return []; } }
+async function tauriPickFolders(): Promise<{ name: string; path: string; size: number }[]> { try { const selected = await dialogOpen({ multiple: true, directory: true, title: '选择文件夹' }); if (!selected) return []; const paths = Array.isArray(selected) ? selected : [selected]; const r: { name: string; path: string; size: number }[] = []; for (const p of paths) { const info = await fileInfo(p); r.push({ name: basename(p), path: p, size: info?.size ?? 0 }); } return r; } catch { return []; } }
 async function tauriPickArchive(): Promise<string> { try { const selected = await dialogOpen({ multiple: false, filters: [{ name: '所有压缩包', extensions: ['zip','7z','rar','tar','gz','bz2','xz','iso','cab','arj','lzh','zst','lzma','wim','cpio','lha','z','txz','tgz','tbz2','tzst','001','r00'] }] }); return selected ? (Array.isArray(selected) ? selected[0] : selected) : ''; } catch { return ''; } }
 async function tauriListArchive(path: string, pw?: string): Promise<ArchiveEntry[]> { try { return (await call("list_archive", { path, password: pw ?? "" })) as ArchiveEntry[]; } catch { return []; } }
 async function tauriExtract(archivePath: string, outputDir: string, password?: string): Promise<{ path: string }> { const r = (await call("extract_archive", { archivePath, outputDir, password: password ?? "" })) as string; return JSON.parse(r); }
@@ -178,7 +178,7 @@ export default function App() {
   // ---- Progress events ----
   useEffect(() => {
     const un = listen<number>("op-progress", e => setProgress(e.payload));
-    return () => { un.then(f => f()); };
+    return () => { un.then(f => f()).catch(() => {}); };
   }, []);
 
   const loadArchive = useCallback(async (p: string, pw?: string) => {
@@ -205,7 +205,7 @@ export default function App() {
       return;
     }
     const newFiles: FileEntry[] = [];
-    for (const p of paths) { const info = await fileInfo(p); if (info) newFiles.push({ id: nextId(), name: basename(p), path: p, size: info.size }); }
+    for (const p of paths) { const info = await fileInfo(p); newFiles.push({ id: nextId(), name: basename(p), path: p, size: info?.size ?? 0 }); }
     setMode("compress");
     setFiles(prev => { const exist = new Set(prev.map(f => f.path)); return [...prev, ...newFiles.filter(f => !exist.has(f.path))]; });
   }, [loadArchive]);
@@ -217,14 +217,14 @@ export default function App() {
       else if (ev.payload.type === "leave") setDragover(false);
       else if (ev.payload.type === "drop") { setDragover(false); handlePaths(ev.payload.paths); }
     });
-    return () => { un.then(f => f()); };
+    return () => { un.then(f => f()).catch(() => {}); };
   }, [handlePaths]);
 
   // ---- 文件关联/命令行启动：自动打开传入的压缩包 ----
   useEffect(() => {
     (async () => { try { const p = await call("get_launch_archive") as string | null; if (p) handlePaths([p]); } catch { } })();
     const un = listen<string>("open-archive", e => { if (e.payload) handlePaths([e.payload]); });
-    return () => { un.then(f => f()); };
+    return () => { un.then(f => f()).catch(() => {}); };
   }, [handlePaths]);
 
   // ---- Compress helpers ----
@@ -415,7 +415,7 @@ export default function App() {
           </div>
           {/* Action bar */}
           <footer className="action-bar">
-            {compressing && progress !== null ? <ProgressBar value={progress} label={'压缩中'} /> : (<>
+            {compressing ? <ProgressBar value={progress ?? 0} label={'压缩中'} /> : (<>
               <div className="action-info">
                 <span>{files.length} {'个文件 · '}{fmtSize(totalSize)}</span>
                 {ratio && <span className="ratio">{' · 减小 '}{ratio}%</span>}
@@ -456,7 +456,7 @@ export default function App() {
             </>)}
             {/* Extract controls */}
             {archivePath && (<div className="extract-bar">
-              {busy && progress !== null ? <ProgressBar value={progress} label={busyOp === "test" ? '测试中' : busyOp === "add" ? '追加中' : busyOp === "delete" ? '删除中' : '解压中'} /> : (<>
+              {busy ? <ProgressBar value={progress ?? 0} label={busyOp === "test" ? '测试中' : busyOp === "add" ? '追加中' : busyOp === "delete" ? '删除中' : '解压中'} /> : (<>
                 <div className="extract-options">
                   <div className="ext-input-row">
                     <span className="ext-label">{'解压到:'}</span>
