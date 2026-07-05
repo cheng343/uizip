@@ -2,7 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::path::PathBuf;
-use tauri::Emitter;
+use std::sync::Mutex;
+use tauri::async_runtime::spawn_blocking;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 fn find_7z() -> PathBuf {
@@ -26,6 +30,9 @@ pub struct ArchiveEntry {
     pub compressed_size: u64,
     pub is_dir: bool,
 }
+
+// 启动时通过文件关联/命令行传入的压缩包路径（取一次即清空）
+struct LaunchArchive(Mutex<Option<String>>);
 
 #[cfg(windows)]
 fn command(exe: &PathBuf) -> Command {
@@ -72,6 +79,7 @@ fn parse_percent(s: &str) -> Option<u32> {
 }
 
 // 流式运行 7z：解析 stdout 中的进度并通过 `op-progress` 事件推送 0-100。
+// 由 spawn_blocking 在后台线程调用，绝不阻塞主线程/UI。
 fn run_7z_streaming(window: &tauri::Window, args: &[String]) -> Result<String, String> {
     let exe = find_7z();
     let mut child = command(&exe)
@@ -161,10 +169,9 @@ fn format_switch(ext: &str) -> &'static str {
     }
 }
 
-// ---- Commands ----
+// ---- 同步实现（在后台线程运行） ----
 
-#[tauri::command]
-fn list_archive(path: String, password: Option<String>) -> Result<Vec<ArchiveEntry>, String> {
+fn list_archive_impl(path: String, password: Option<String>) -> Result<Vec<ArchiveEntry>, String> {
     let mut args: Vec<String> = vec!["l".into(), "-slt".into(), path.clone()];
     if let Some(ref pw) = password {
         if !pw.is_empty() {
@@ -206,16 +213,7 @@ fn list_archive(path: String, password: Option<String>) -> Result<Vec<ArchiveEnt
     Ok(entries)
 }
 
-#[tauri::command]
-fn compress_files(
-    window: tauri::Window,
-    input_paths: Vec<String>,
-    output_path: String,
-    format: Option<String>,    // zip, 7z, tar, wim
-    level: Option<u8>,         // 0-9
-    password: Option<String>,
-    volume: Option<String>,    // e.g. "100M", "4G"
-) -> Result<String, String> {
+fn compress_impl(window: &tauri::Window, input_paths: Vec<String>, output_path: String, format: Option<String>, level: Option<u8>, password: Option<String>, volume: Option<String>) -> Result<String, String> {
     let fmt = format.unwrap_or_else(|| "zip".into());
     let switch = format_switch(&fmt);
     let mut args: Vec<String> = vec!["a".into(), "-bsp1".into(), format!("-t{}", switch), output_path.clone()];
@@ -245,19 +243,13 @@ fn compress_files(
         args.push(ip.clone());
     }
 
-    run_7z_streaming(&window, &args)?;
+    run_7z_streaming(window, &args)?;
 
     let meta = std::fs::metadata(&output_path).map_err(|e| format!("无法读取输出文件: {}", e))?;
     Ok(serde_json::json!({ "path": output_path, "size": meta.len() }).to_string())
 }
 
-#[tauri::command]
-fn extract_archive(
-    window: tauri::Window,
-    archive_path: String,
-    output_dir: String,
-    password: Option<String>,
-) -> Result<String, String> {
+fn extract_impl(window: &tauri::Window, archive_path: String, output_dir: String, password: Option<String>) -> Result<String, String> {
     std::fs::create_dir_all(&output_dir).map_err(|e| format!("无法创建目录: {}", e))?;
     let mut args: Vec<String> = vec!["x".into(), "-bsp1".into(), archive_path, format!("-o{}", output_dir), "-y".into()];
     if let Some(ref pw) = password {
@@ -265,101 +257,96 @@ fn extract_archive(
             args.push(format!("-p{}", pw));
         }
     }
-    run_7z_streaming(&window, &args)?;
+    run_7z_streaming(window, &args)?;
     Ok(serde_json::json!({ "path": output_dir }).to_string())
+}
+
+// ---- Commands（async：由后台线程池执行，不阻塞 UI） ----
+
+#[tauri::command]
+async fn list_archive(path: String, password: Option<String>) -> Result<Vec<ArchiveEntry>, String> {
+    spawn_blocking(move || list_archive_impl(path, password)).await.map_err(|e| format!("任务执行失败: {}", e))?
+}
+
+#[tauri::command]
+async fn compress_files(
+    window: tauri::Window,
+    input_paths: Vec<String>,
+    output_path: String,
+    format: Option<String>,
+    level: Option<u8>,
+    password: Option<String>,
+    volume: Option<String>,
+) -> Result<String, String> {
+    spawn_blocking(move || compress_impl(&window, input_paths, output_path, format, level, password, volume))
+        .await.map_err(|e| format!("任务执行失败: {}", e))?
+}
+
+#[tauri::command]
+async fn extract_archive(
+    window: tauri::Window,
+    archive_path: String,
+    output_dir: String,
+    password: Option<String>,
+) -> Result<String, String> {
+    spawn_blocking(move || extract_impl(&window, archive_path, output_dir, password))
+        .await.map_err(|e| format!("任务执行失败: {}", e))?
 }
 
 // 测试压缩包完整性 (7z t)
 #[tauri::command]
-fn test_archive(
-    window: tauri::Window,
-    archive_path: String,
-    password: Option<String>,
-) -> Result<String, String> {
-    let mut args: Vec<String> = vec!["t".into(), "-bsp1".into(), archive_path];
-    if let Some(ref pw) = password {
-        if !pw.is_empty() {
-            args.push(format!("-p{}", pw));
-        }
-    }
-    let out = run_7z_streaming(&window, &args)?;
-    let ok = out.contains("Everything is Ok") || out.contains("No errors");
-    Ok(serde_json::json!({ "ok": ok, "detail": out.trim() }).to_string())
+async fn test_archive(window: tauri::Window, archive_path: String, password: Option<String>) -> Result<String, String> {
+    spawn_blocking(move || {
+        let mut args: Vec<String> = vec!["t".into(), "-bsp1".into(), archive_path];
+        if let Some(ref pw) = password { if !pw.is_empty() { args.push(format!("-p{}", pw)); } }
+        let out = run_7z_streaming(&window, &args)?;
+        let ok = out.contains("Everything is Ok") || out.contains("No errors");
+        Ok(serde_json::json!({ "ok": ok, "detail": out.trim() }).to_string())
+    }).await.map_err(|e| format!("任务执行失败: {}", e))?
 }
 
 // 向已有压缩包追加文件 (7z a)
 #[tauri::command]
-fn add_to_archive(
-    window: tauri::Window,
-    archive_path: String,
-    input_paths: Vec<String>,
-    password: Option<String>,
-) -> Result<String, String> {
-    let mut args: Vec<String> = vec!["a".into(), "-bsp1".into(), archive_path.clone()];
-    if let Some(ref pw) = password {
-        if !pw.is_empty() {
-            args.push(format!("-p{}", pw));
-        }
-    }
-    for ip in &input_paths {
-        args.push(ip.clone());
-    }
-    run_7z_streaming(&window, &args)?;
-    let size = std::fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0);
-    Ok(serde_json::json!({ "path": archive_path, "size": size }).to_string())
+async fn add_to_archive(window: tauri::Window, archive_path: String, input_paths: Vec<String>, password: Option<String>) -> Result<String, String> {
+    spawn_blocking(move || {
+        let mut args: Vec<String> = vec!["a".into(), "-bsp1".into(), archive_path.clone()];
+        if let Some(ref pw) = password { if !pw.is_empty() { args.push(format!("-p{}", pw)); } }
+        for ip in &input_paths { args.push(ip.clone()); }
+        run_7z_streaming(&window, &args)?;
+        let size = std::fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0);
+        Ok(serde_json::json!({ "path": archive_path, "size": size }).to_string())
+    }).await.map_err(|e| format!("任务执行失败: {}", e))?
 }
 
 // 从压缩包删除条目 (7z d)
 #[tauri::command]
-fn delete_from_archive(
-    window: tauri::Window,
-    archive_path: String,
-    entries: Vec<String>,
-    password: Option<String>,
-) -> Result<String, String> {
+async fn delete_from_archive(window: tauri::Window, archive_path: String, entries: Vec<String>, password: Option<String>) -> Result<String, String> {
     if entries.is_empty() {
         return Err("未选择要删除的条目".into());
     }
-    let mut args: Vec<String> = vec!["d".into(), "-bsp1".into(), archive_path.clone()];
-    if let Some(ref pw) = password {
-        if !pw.is_empty() {
-            args.push(format!("-p{}", pw));
-        }
-    }
-    for e in &entries {
-        args.push(e.clone());
-    }
-    run_7z_streaming(&window, &args)?;
-    let size = std::fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0);
-    Ok(serde_json::json!({ "path": archive_path, "size": size }).to_string())
+    spawn_blocking(move || {
+        let mut args: Vec<String> = vec!["d".into(), "-bsp1".into(), archive_path.clone()];
+        if let Some(ref pw) = password { if !pw.is_empty() { args.push(format!("-p{}", pw)); } }
+        for e in &entries { args.push(e.clone()); }
+        run_7z_streaming(&window, &args)?;
+        let size = std::fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0);
+        Ok(serde_json::json!({ "path": archive_path, "size": size }).to_string())
+    }).await.map_err(|e| format!("任务执行失败: {}", e))?
 }
 
 // 解压单个条目到临时目录并用系统默认程序打开（预览）
 #[tauri::command]
-fn extract_and_open(
-    archive_path: String,
-    entry: String,
-    password: Option<String>,
-) -> Result<String, String> {
-    let tmp = std::env::temp_dir().join("uizip_preview");
-    std::fs::create_dir_all(&tmp).map_err(|e| format!("无法创建临时目录: {}", e))?;
-    let mut args: Vec<String> = vec![
-        "x".into(),
-        archive_path,
-        format!("-o{}", tmp.to_string_lossy()),
-        entry.clone(),
-        "-y".into(),
-    ];
-    if let Some(ref pw) = password {
-        if !pw.is_empty() {
-            args.push(format!("-p{}", pw));
-        }
-    }
-    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_7z(&str_args)?;
-
-    let target = tmp.join(entry.replace('/', "\\"));
-    open_path(&target.to_string_lossy())
+async fn extract_and_open(archive_path: String, entry: String, password: Option<String>) -> Result<String, String> {
+    spawn_blocking(move || {
+        let tmp = std::env::temp_dir().join("uizip_preview");
+        std::fs::create_dir_all(&tmp).map_err(|e| format!("无法创建临时目录: {}", e))?;
+        let mut args: Vec<String> = vec!["x".into(), archive_path, format!("-o{}", tmp.to_string_lossy()), entry.clone(), "-y".into()];
+        if let Some(ref pw) = password { if !pw.is_empty() { args.push(format!("-p{}", pw)); } }
+        let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        run_7z(&str_args)?;
+        let target = tmp.join(entry.replace('/', "\\"));
+        open_path(&target.to_string_lossy())
+    }).await.map_err(|e| format!("任务执行失败: {}", e))?
 }
 
 // 在文件资源管理器中定位文件
@@ -381,7 +368,6 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
 fn open_path(path: &str) -> Result<String, String> {
     #[cfg(windows)]
     {
-        // 用 explorer 以默认关联程序打开
         Command::new("explorer")
             .arg(path)
             .spawn()
@@ -399,6 +385,12 @@ fn open_file(path: String) -> Result<String, String> {
     open_path(&path)
 }
 
+// 取出启动时传入的压缩包路径（文件关联/命令行），取后清空
+#[tauri::command]
+fn get_launch_archive(state: tauri::State<LaunchArchive>) -> Option<String> {
+    state.0.lock().ok().and_then(|mut g| g.take())
+}
+
 #[tauri::command]
 fn get_file_info(path: String) -> Result<String, String> {
     let metadata = std::fs::metadata(&path).map_err(|e| format!("{}", e))?;
@@ -406,30 +398,32 @@ fn get_file_info(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn list_files_in_dir(dir_path: String) -> Result<String, String> {
-    let mut files: Vec<serde_json::Value> = Vec::new();
-    fn walk(dir: &std::path::Path, files: &mut Vec<serde_json::Value>, base: &std::path::Path) {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                let meta = entry.metadata().ok();
-                let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let is_dir = meta.map(|m| m.is_dir()).unwrap_or(false);
-                let rel = path.strip_prefix(base).unwrap_or(&path).to_string_lossy().to_string();
-                files.push(serde_json::json!({ "name": name, "path": path.to_string_lossy(), "rel": rel, "size": size, "is_dir": is_dir }));
-                if is_dir {
-                    walk(&path, files, base);
+async fn list_files_in_dir(dir_path: String) -> Result<String, String> {
+    spawn_blocking(move || {
+        let mut files: Vec<serde_json::Value> = Vec::new();
+        fn walk(dir: &std::path::Path, files: &mut Vec<serde_json::Value>, base: &std::path::Path) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    let meta = entry.metadata().ok();
+                    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                    let is_dir = meta.map(|m| m.is_dir()).unwrap_or(false);
+                    let rel = path.strip_prefix(base).unwrap_or(&path).to_string_lossy().to_string();
+                    files.push(serde_json::json!({ "name": name, "path": path.to_string_lossy(), "rel": rel, "size": size, "is_dir": is_dir }));
+                    if is_dir {
+                        walk(&path, files, base);
+                    }
                 }
             }
         }
-    }
-    let p = std::path::Path::new(&dir_path);
-    if !p.is_dir() {
-        return Err(format!("{} 不是有效目录", dir_path));
-    }
-    walk(p, &mut files, p);
-    Ok(serde_json::json!(files).to_string())
+        let p = std::path::Path::new(&dir_path);
+        if !p.is_dir() {
+            return Err(format!("{} 不是有效目录", dir_path));
+        }
+        walk(p, &mut files, p);
+        Ok(serde_json::json!(files).to_string())
+    }).await.map_err(|e| format!("任务执行失败: {}", e))?
 }
 
 #[tauri::command]
@@ -439,7 +433,6 @@ fn dialog_open(app: tauri::AppHandle) -> Result<Vec<String>, String> {
         None => Ok(vec![]),
     }
 }
-
 
 #[tauri::command]
 fn dialog_pick_folders(app: tauri::AppHandle) -> Result<Vec<String>, String> {
@@ -472,10 +465,67 @@ fn dialog_pick_folder(app: tauri::AppHandle) -> Result<String, String> {
     }
 }
 
+// 从命令行参数里找出第一个存在的文件（文件关联双击时即为该压缩包）
+fn first_file_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    args.into_iter().skip(1).find(|a| !a.starts_with('-') && std::path::Path::new(a).is_file())
+}
+
+fn focus_main(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    let w = app.get_webview_window("main")?;
+    let _ = w.show();
+    let _ = w.unminimize();
+    let _ = w.set_focus();
+    Some(w)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例：第二次启动（如再双击一个压缩包）转发给已运行窗口
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let arch = first_file_arg(argv.iter().cloned());
+            if let Some(_w) = focus_main(app) {
+                if let Some(p) = arch {
+                    let _ = app.emit("open-archive", p);
+                }
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
+        .manage(LaunchArchive(Mutex::new(first_file_arg(std::env::args()))))
+        .setup(|app| {
+            // ---- 系统托盘（后台保留） ----
+            let show_i = MenuItem::with_id(app, "show", "显示 uiZip", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let _tray = TrayIconBuilder::with_id("main-tray")
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("uiZip")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => { focus_main(app); }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        focus_main(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
+            // ---- 关闭窗口 = 隐藏到托盘，进程后台常驻 ----
+            if let Some(w) = app.get_webview_window("main") {
+                let wc = w.clone();
+                w.on_window_event(move |e| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+                        api.prevent_close();
+                        let _ = wc.hide();
+                    }
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_archive,
             compress_files,
@@ -486,6 +536,7 @@ pub fn run() {
             extract_and_open,
             reveal_in_explorer,
             open_file,
+            get_launch_archive,
             get_file_info,
             dialog_open,
             list_files_in_dir,

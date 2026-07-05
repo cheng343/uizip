@@ -28,6 +28,14 @@
   "bundle": {
     "active": true,
     "targets": "nsis",
+    "fileAssociations": [
+      {
+        "ext": ["zip", "7z", "rar", "tar", "gz", "bz2", "xz", "zst", "lzma", "cab", "iso", "arj", "lzh", "wim", "tgz", "tbz2", "txz"],
+        "name": "uiZip.Archive",
+        "description": "uiZip 压缩包",
+        "role": "Editor"
+      }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

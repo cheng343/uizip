@@ -25,15 +25,14 @@ const LEVELS: { value: CompLevel; label: string; hint: string }[] = [
 ];
 const FORMAT_LABELS: Record<ArchiveFormat, string> = { "7z": "7z (高压缩)", zip: "ZIP (通用)", tar: "TAR (归档)", gz: "GZip (.gz)", bz2: "BZip2 (.bz2)", xz: "XZ (.xz)", lzma: "LZMA", zst: "Zstd", iso: "ISO (光盘镜像)", cab: "CAB (微软)", arj: "ARJ", lzh: "LZH", wim: "WIM (映像)" };
 const FORMAT_EXT: Record<ArchiveFormat, string> = { zip: ".zip", "7z": ".7z", tar: ".tar", gz: ".gz", bz2: ".bz2", xz: ".xz", lzma: ".lzma", zst: ".zst", iso: ".iso", cab: ".cab", arj: ".arj", lzh: ".lzh", wim: ".wim" };
-const ARCHIVE_EXTS = [".zip", ".7z", ".rar", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab", ".arj", ".lzh", ".zst", ".lzma", ".wim", ".cpio", ".lha", ".tgz", ".tbz2", ".txz", ".tzst", ".001", ".r00"];
+const ARCHIVE_EXTS = [".zip", ".zip.001", ".7z", ".7z.001", ".rar", ".r00", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".gz", ".bz2", ".xz", ".iso", ".cab", ".arj", ".lzh", ".zst", ".lzma", ".wim", ".cpio", ".lha", ".tgz", ".tbz2", ".txz", ".tzst", ".001", ".r00"];
 
 function fmtSize(bytes: number): string { if (bytes < 1024) return bytes + " B"; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB"; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB"; return (bytes / 1073741824).toFixed(2) + " GB"; }
 function basename(p: string): string { const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return s === -1 ? p : p.slice(s + 1); }
 function dirname(p: string): string { const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return s === -1 ? "" : p.slice(0, s); }
 function stripExt(p: string): string { const d = p.lastIndexOf("."); if (d === -1) return p; const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return d > s ? p.slice(0, d) : p; }
-function extname(p: string): string { const d = p.lastIndexOf("."); if (d === -1) return ""; const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return d > s ? p.slice(d).toLowerCase() : ""; }
 function rtrimBackslash(s: string): string { let i = s.length; while (i > 0 && (s.charCodeAt(i - 1) === 92 || s.charCodeAt(i - 1) === 47)) i--; return s.slice(0, i); }
-function isArchive(f: string): boolean { const e = extname(f); return ARCHIVE_EXTS.includes(e); }
+function isArchive(f: string): boolean { const low = f.toLowerCase(); for (const ext of ARCHIVE_EXTS) { if (low.endsWith(ext)) return true; } return false; }
 let uid = 0; const nextId = () => "f" + (++uid);
 
 // 把扁平的压缩包条目构建成文件夹树
@@ -215,6 +214,13 @@ export default function App() {
       else if (ev.payload.type === "leave") setDragover(false);
       else if (ev.payload.type === "drop") { setDragover(false); handlePaths(ev.payload.paths); }
     });
+    return () => { un.then(f => f()); };
+  }, [handlePaths]);
+
+  // ---- 文件关联/命令行启动：自动打开传入的压缩包 ----
+  useEffect(() => {
+    (async () => { try { const p = await call("get_launch_archive") as string | null; if (p) handlePaths([p]); } catch { } })();
+    const un = listen<string>("open-archive", e => { if (e.payload) handlePaths([e.payload]); });
     return () => { un.then(f => f()); };
   }, [handlePaths]);
 
