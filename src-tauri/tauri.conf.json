@@ -1,4 +1,4 @@
-{
+﻿{
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "uiZip",
   "version": "1.0.0",
@@ -30,7 +30,30 @@
     "targets": "nsis",
     "fileAssociations": [
       {
-        "ext": ["zip", "7z", "rar", "tar", "gz", "bz2", "xz", "zst", "lzma", "cab", "iso", "arj", "lzh", "wim", "tgz", "tbz2", "txz"],
+        "ext": [
+          "zip",
+          "7z",
+          "rar",
+          "tar",
+          "gz",
+          "bz2",
+          "xz",
+          "zst",
+          "lzma",
+          "cab",
+          "iso",
+          "arj",
+          "lzh",
+          "wim",
+          "tgz",
+          "tbz2",
+          "txz",
+          "tzst",
+          "cpio",
+          "lha",
+          "001",
+          "r00"
+        ],
         "name": "uiZip.Archive",
         "description": "uiZip 压缩包",
         "role": "Editor"

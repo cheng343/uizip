@@ -25,7 +25,7 @@ const LEVELS: { value: CompLevel; label: string; hint: string }[] = [
 ];
 const FORMAT_LABELS: Record<ArchiveFormat, string> = { "7z": "7z (高压缩)", zip: "ZIP (通用)", tar: "TAR (归档)", gz: "GZip (.gz)", bz2: "BZip2 (.bz2)", xz: "XZ (.xz)", lzma: "LZMA", zst: "Zstd", iso: "ISO (光盘镜像)", cab: "CAB (微软)", arj: "ARJ", lzh: "LZH", wim: "WIM (映像)" };
 const FORMAT_EXT: Record<ArchiveFormat, string> = { zip: ".zip", "7z": ".7z", tar: ".tar", gz: ".gz", bz2: ".bz2", xz: ".xz", lzma: ".lzma", zst: ".zst", iso: ".iso", cab: ".cab", arj: ".arj", lzh: ".lzh", wim: ".wim" };
-const ARCHIVE_EXTS = [".zip", ".zip.001", ".7z", ".7z.001", ".rar", ".r00", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".gz", ".bz2", ".xz", ".iso", ".cab", ".arj", ".lzh", ".zst", ".lzma", ".wim", ".cpio", ".lha", ".tgz", ".tbz2", ".txz", ".tzst"];
+const ARCHIVE_EXTS = [".zip", ".zip.001", ".7z", ".7z.001", ".rar", ".r00", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".gz", ".bz2", ".xz", ".iso", ".cab", ".arj", ".lzh", ".zst", ".lzma", ".wim", ".cpio", ".lha", ".tgz", ".tbz2", ".txz", ".tzst", ".001", ".r00"];
 
 function fmtSize(bytes: number): string { if (bytes < 1024) return bytes + " B"; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB"; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB"; return (bytes / 1073741824).toFixed(2) + " GB"; }
 function basename(p: string): string { const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return s === -1 ? p : p.slice(s + 1); }
