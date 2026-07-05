@@ -1,24 +1,30 @@
-; uiZip NSIS 安装钩子：把安装目录加入当前用户 PATH（可在终端直接 uizip file.zip）
-; 只用核心指令 StrCmp + 数字常量，避免依赖额外 include，保证 CI 编译通过。
-; HWND_BROADCAST=0xFFFF, WM_SETTINGCHANGE=0x1A
+; uiZip NSIS 安装钩子：PATH 注册 + WebView2 静默安装
 
 !macro customInstall
-  ReadRegStr $0 HKCU "Environment" "Path"
-  StrCmp $0 "" uizip_path_empty uizip_path_append
+  ; --- 静默安装 WebView2 Runtime ---
+  ; 如果检测不到 WebView2，运行内嵌的引导程序（静默模式）
+  ReadRegStr  HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+  StrCmp  "" install_webview2 skip_webview2
+  install_webview2:
+    ; 从安装目录运行引导程序（静默安装）
+    ExecWait '"\resources\MicrosoftEdgeWebview2Setup.exe" /silent /install' 
+  skip_webview2:
+
+  ; --- PATH 环境变量注册 ---
+  ReadRegStr  HKCU "Environment" "Path"
+  StrCmp  "" uizip_path_empty uizip_path_append
   uizip_path_empty:
-    WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR"
+    WriteRegExpandStr HKCU "Environment" "Path" ""
     Goto uizip_path_done
   uizip_path_append:
-    ; ponytail: 不做子串查重，重复安装可能追加重复项（无害）；精确查重需 StrFunc，为保证编译稳定这里省略。
-    WriteRegExpandStr HKCU "Environment" "Path" "$0;$INSTDIR"
+    WriteRegExpandStr HKCU "Environment" "Path" ";"
   uizip_path_done:
   SendMessage 0xFFFF 0x1A 0 "STR:Environment" /TIMEOUT=500
 !macroend
 
 !macro customUninstall
-  ReadRegStr $0 HKCU "Environment" "Path"
-  ; 仅当 PATH 恰好等于本程序目录时才清除；处于中间的项需子串操作，此处不动以免误删他人 PATH。
-  StrCmp $0 "$INSTDIR" uizip_unpath_clear uizip_unpath_done
+  ReadRegStr  HKCU "Environment" "Path"
+  StrCmp  "" uizip_unpath_clear uizip_unpath_done
   uizip_unpath_clear:
     DeleteRegValue HKCU "Environment" "Path"
   uizip_unpath_done:

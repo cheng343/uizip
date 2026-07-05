@@ -81,8 +81,7 @@
         "languages": [
           "SimpChinese",
           "English"
-        ],
-        "webviewInstallMode": "offline"
+        ]
       }
     }
   },
