@@ -9,6 +9,8 @@
     "core:default",
     "dialog:default",
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "core:event:default",
+    "core:event:allow-listen"
   ]
 }
