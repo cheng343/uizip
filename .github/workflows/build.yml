@@ -19,22 +19,14 @@ jobs:
         with:
           toolchain: stable-msvc
 
-      - name: Install NSIS
-        run: choco install nsis -y --no-progress
-
-      - name: Verify NSIS
-        run: |
-          dir "C:\Program Files (x86)\NSIS\Bin\makensis.exe"
-          echo "C:\Program Files (x86)\NSIS\Bin" | Out-File -Append -FilePath  -Encoding utf8
-
-      - name: Install npm deps
+      - name: Install dependencies
         run: npm ci
 
       - name: Build Tauri
         run: npx tauri build --bundles nsis
 
-      - name: Find installer
-        run: Get-ChildItem -Path src-tauri\target\release\bundle -Recurse -Filter *.exe
+      - name: Show installer
+        run: Get-ChildItem -Path src-tauri\target\release\bundle\nsis -Recurse -Filter *.exe
 
       - uses: actions/upload-artifact@v4
         if: success()
