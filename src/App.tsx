@@ -25,7 +25,7 @@ const LEVELS: { value: CompLevel; label: string; hint: string }[] = [
 ];
 const FORMAT_LABELS: Record<ArchiveFormat, string> = { "7z": "7z (高压缩)", zip: "ZIP (通用)", tar: "TAR (归档)", gz: "GZip (.gz)", bz2: "BZip2 (.bz2)", xz: "XZ (.xz)", lzma: "LZMA", zst: "Zstd", iso: "ISO (光盘镜像)", cab: "CAB (微软)", arj: "ARJ", lzh: "LZH", wim: "WIM (映像)" };
 const FORMAT_EXT: Record<ArchiveFormat, string> = { zip: ".zip", "7z": ".7z", tar: ".tar", gz: ".gz", bz2: ".bz2", xz: ".xz", lzma: ".lzma", zst: ".zst", iso: ".iso", cab: ".cab", arj: ".arj", lzh: ".lzh", wim: ".wim" };
-const ARCHIVE_EXTS = [".zip", ".zip.001", ".7z", ".7z.001", ".rar", ".r00", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".gz", ".bz2", ".xz", ".iso", ".cab", ".arj", ".lzh", ".zst", ".lzma", ".wim", ".cpio", ".lha", ".tgz", ".tbz2", ".txz", ".tzst", ".001", ".r00"];
+const ARCHIVE_EXTS = [".zip", ".zip.001", ".7z", ".7z.001", ".rar", ".r00", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".gz", ".bz2", ".xz", ".iso", ".cab", ".arj", ".lzh", ".zst", ".lzma", ".wim", ".cpio", ".lha", ".tgz", ".tbz2", ".txz", ".tzst"];
 
 function fmtSize(bytes: number): string { if (bytes < 1024) return bytes + " B"; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB"; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB"; return (bytes / 1073741824).toFixed(2) + " GB"; }
 function basename(p: string): string { const s = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return s === -1 ? p : p.slice(s + 1); }
@@ -60,13 +60,16 @@ function buildTree(entries: ArchiveEntry[]): TreeNode[] {
   sortRec(root);
   return root.children;
 }
+
 // 收集某节点下所有文件的原始条目名（用于删除/选择）
 function collectFiles(node: TreeNode, out: string[]) { if (node.isDir) node.children.forEach(c => collectFiles(c, out)); else out.push(node.full); }
 
 // ---- Tauri bridge ----
 async function call(cmd: string, args?: Record<string, unknown>): Promise<unknown> { return tauriInvoke(cmd, args ?? {}); }
-async function fileInfo(p: string): Promise<{ size: number; is_dir: boolean } | null> { try { return JSON.parse((await call("get_file_info", { path: p })) as string); } catch { return null; } }
-async function tauriPickFiles(): Promise<{ name: string; path: string; size: number }[]> { try { const selected = await dialogOpen({ multiple: true, filters: [{ name: '所有文件', extensions: ['*'] }] }); if (!selected) return []; const paths = Array.isArray(selected) ? selected : [selected]; const r: { name: string; path: string; size: number }[] = []; for (const p of paths) { const info = await fileInfo(p); if (info) r.push({ name: basename(p), path: p, size: info.size }); } return r; } catch { return []; } }
+async function fileInfo(p: string): Promise<{ size: number; is_dir: boolean } | null> {
+  try { return JSON.parse((await call("get_file_info", { path: p })) as string) as { size: number; is_dir: boolean }; } catch { return null; }
+}
+async function tauriPickFiles(): Promise<{ name: string; path: string; size: number }[]> { try { const selected = await dialogOpen({ multiple: true }); if (!selected) return []; const paths = Array.isArray(selected) ? selected : [selected]; const r: { name: string; path: string; size: number }[] = []; for (const p of paths) { const info = await fileInfo(p); if (info) r.push({ name: basename(p), path: p, size: info.size }); } return r; } catch { return []; } }
 async function tauriPickFolders(): Promise<{ name: string; path: string; size: number }[]> { try { const selected = await dialogOpen({ multiple: true, directory: true, title: '选择文件夹' }); if (!selected) return []; const paths = Array.isArray(selected) ? selected : [selected]; const r: { name: string; path: string; size: number }[] = []; for (const p of paths) { const info = await fileInfo(p); if (info) r.push({ name: basename(p), path: p, size: info.size }); } return r; } catch { return []; } }
 async function tauriPickArchive(): Promise<string> { try { const selected = await dialogOpen({ multiple: false, filters: [{ name: '所有压缩包', extensions: ['zip','7z','rar','tar','gz','bz2','xz','iso','cab','arj','lzh','zst','lzma','wim','cpio','lha','z','txz','tgz','tbz2','tzst','001','r00'] }] }); return selected ? (Array.isArray(selected) ? selected[0] : selected) : ''; } catch { return ''; } }
 async function tauriListArchive(path: string, pw?: string): Promise<ArchiveEntry[]> { try { return (await call("list_archive", { path, password: pw ?? "" })) as ArchiveEntry[]; } catch { return []; } }
