@@ -1,16 +1,10 @@
-; uiZip NSIS 安装钩子：PATH 注册 + WebView2 静默安装
+; uiZip NSIS 安装钩子
 
 !macro customInstall
-  ; --- 静默安装 WebView2 Runtime ---
-  ; 如果检测不到 WebView2，运行内嵌的引导程序（静默模式）
-  ReadRegStr  HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
-  StrCmp  "" install_webview2 skip_webview2
-  install_webview2:
-    ; 从安装目录运行引导程序（静默安装）
-    ExecWait '"\resources\MicrosoftEdgeWebview2Setup.exe" /silent /install' 
-  skip_webview2:
+  ; 把 WebView2Loader.dll 从 resources 复制到安装根目录
+  CopyFiles "\resources\WebView2Loader.dll" ""
 
-  ; --- PATH 环境变量注册 ---
+  ; PATH 注册
   ReadRegStr  HKCU "Environment" "Path"
   StrCmp  "" uizip_path_empty uizip_path_append
   uizip_path_empty:
@@ -23,6 +17,7 @@
 !macroend
 
 !macro customUninstall
+  Delete "\WebView2Loader.dll"
   ReadRegStr  HKCU "Environment" "Path"
   StrCmp  "" uizip_unpath_clear uizip_unpath_done
   uizip_unpath_clear:

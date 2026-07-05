@@ -70,7 +70,9 @@
       "debugApplicationIdSuffix": ".debug"
     },
     "resources": [
-      "resources/*"
+      "resources/7z.exe",
+      "resources/7z.dll",
+      "resources/MicrosoftEdgeWebview2Setup.exe"
     ],
     "windows": {
       "nsis": {
