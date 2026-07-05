@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::path::PathBuf;
@@ -192,8 +192,8 @@ fn list_archive_impl(path: String, password: Option<String>) -> Result<Vec<Archi
             current_name = line[7..].to_string();
         } else if line.starts_with("Size = ") {
             current_size = line[7..].trim().trim_start_matches('+').parse().unwrap_or(0);
-        } else if line.starts_with("Compressed Size = ") {
-            current_compressed = line[18..].trim().trim_start_matches('+').parse().unwrap_or(0);
+        } else if line.starts_with("Packed Size = ") {
+            current_compressed = line[14..].trim().trim_start_matches('+').parse().unwrap_or(0);
         } else if line.starts_with("Attributes = ") {
             current_attr = line[13..].trim().to_string();
         }
