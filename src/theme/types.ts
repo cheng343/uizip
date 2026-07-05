@@ -1,5 +1,5 @@
 // 主题系统核心类型定义
-export type ThemeId = 'material';
+export type ThemeId = 'material' | 'dark' | 'glassmorphism' | 'neumorphism';
 
 export interface ThemeColors {
   // 主色调
@@ -36,6 +36,7 @@ export interface Theme {
   id: ThemeId;
   name: string;
   label: string;
+  isDark: boolean;
   colors: ThemeColors;
   // 额外的 CSS 变量值
   cssExtras: Record<string, string>;

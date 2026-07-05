@@ -1,4 +1,4 @@
-﻿import {
+import {
   createContext,
   useCallback,
   useContext,
@@ -12,6 +12,7 @@ import { themes } from './themes'; import type { Theme, ThemeId } from './types'
 interface ThemeCtx {
   theme: Theme;
   setThemeId: (id: ThemeId) => void;
+  toggleDark: () => void;
 }
 
 const ThemeContext = createContext<ThemeCtx | null>(null);
@@ -36,8 +37,9 @@ function applyCSSVariables(theme: Theme) {
   for (const [key, value] of Object.entries(cssExtras)) {
     root.style.setProperty(key, value);
   }
-
-  // 鐗规畩澶勭悊鐜荤拑鎬佽儗鏅浘
+  // 供 CSS 中 [data-theme="..."] 主题专属样式使用
+  root.setAttribute('data-theme', theme.id);
+  root.style.colorScheme = theme.isDark ? 'dark' : 'light';
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -54,7 +56,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(STORAGE_KEY, id); } catch { /* noop */ }
   }, []);
 
-  const value = useMemo<ThemeCtx>(() => ({ theme, setThemeId }), [theme, setThemeId]);
+  // 一键在浅/深之间切换：深色系 -> Material，浅色系 -> 深色
+  const toggleDark = useCallback(() => {
+    setTheme(prev => {
+      const next = themes[prev.isDark ? 'material' : 'dark'];
+      try { localStorage.setItem(STORAGE_KEY, next.id); } catch { /* noop */ }
+      return next;
+    });
+  }, []);
+
+  const value = useMemo<ThemeCtx>(() => ({ theme, setThemeId, toggleDark }), [theme, setThemeId, toggleDark]);
 
   return (
     <ThemeContext.Provider value={value}>

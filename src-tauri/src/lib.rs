@@ -1,6 +1,8 @@
-﻿use serde::{Deserialize, Serialize};
-use std::process::Command;
+use serde::{Deserialize, Serialize};
+use std::io::Read;
+use std::process::{Command, Stdio};
 use std::path::PathBuf;
+use tauri::Emitter;
 use tauri_plugin_dialog::DialogExt;
 
 fn find_7z() -> PathBuf {
@@ -25,9 +27,22 @@ pub struct ArchiveEntry {
     pub is_dir: bool,
 }
 
+#[cfg(windows)]
+fn command(exe: &PathBuf) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut c = Command::new(exe);
+    c.creation_flags(CREATE_NO_WINDOW); // 不弹出 7z 控制台黑窗
+    c
+}
+#[cfg(not(windows))]
+fn command(exe: &PathBuf) -> Command {
+    Command::new(exe)
+}
+
 fn run_7z(args: &[&str]) -> Result<String, String> {
     let exe = find_7z();
-    let output = Command::new(&exe)
+    let output = command(&exe)
         .args(args)
         .output()
         .map_err(|e| format!("7z 启动失败: {}", e))?;
@@ -38,6 +53,90 @@ fn run_7z(args: &[&str]) -> Result<String, String> {
         return Err(if msg.is_empty() { format!("7z 异常退出，代码: {}", output.status.code().unwrap_or(-1)) } else { msg });
     }
     Ok(stdout)
+}
+
+// 从形如 " 42% 12 - name" 的进度行里取出百分比。
+// ponytail: 简单启发式——找第一个 '%' 再向左收数字。7z 用 \r 覆盖进度行，
+// 非进度输出不含 "N%" 前缀，因此误报极少；若 7z 输出格式变化最多是进度不动，不影响结果正确性。
+fn parse_percent(s: &str) -> Option<u32> {
+    let bytes = s.as_bytes();
+    let pos = bytes.iter().position(|&b| b == b'%')?;
+    let mut start = pos;
+    while start > 0 && bytes[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+    if start == pos {
+        return None;
+    }
+    s[start..pos].parse::<u32>().ok().filter(|&p| p <= 100)
+}
+
+// 流式运行 7z：解析 stdout 中的进度并通过 `op-progress` 事件推送 0-100。
+fn run_7z_streaming(window: &tauri::Window, args: &[String]) -> Result<String, String> {
+    let exe = find_7z();
+    let mut child = command(&exe)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("7z 启动失败: {}", e))?;
+
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+
+    // stderr 在独立线程收集，避免管道写满造成死锁
+    let err_handle = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stderr.read_to_string(&mut s);
+        s
+    });
+
+    let _ = window.emit("op-progress", 0u32);
+    let mut buf = [0u8; 4096];
+    let mut line: Vec<u8> = Vec::new();
+    let mut full = String::new();
+    let mut last_pct: i32 = -1;
+    loop {
+        let n = match stdout.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        for &b in &buf[..n] {
+            if b == b'\r' || b == b'\n' || b == 0x08 {
+                if !line.is_empty() {
+                    let text = String::from_utf8_lossy(&line).to_string();
+                    match parse_percent(&text) {
+                        Some(p) if p as i32 != last_pct => {
+                            last_pct = p as i32;
+                            let _ = window.emit("op-progress", p);
+                        }
+                        Some(_) => {}
+                        None => {
+                            full.push_str(&text);
+                            full.push('\n');
+                        }
+                    }
+                    line.clear();
+                }
+            } else {
+                line.push(b);
+            }
+        }
+    }
+    if !line.is_empty() {
+        full.push_str(&String::from_utf8_lossy(&line));
+    }
+
+    let status = child.wait().map_err(|e| format!("等待 7z 结束失败: {}", e))?;
+    let err = err_handle.join().unwrap_or_default();
+    let _ = window.emit("op-progress", 100u32);
+
+    if !status.success() {
+        let msg = if !err.trim().is_empty() { err.trim().to_string() } else { full.trim().to_string() };
+        return Err(if msg.is_empty() { format!("7z 异常退出，代码: {}", status.code().unwrap_or(-1)) } else { msg });
+    }
+    Ok(full)
 }
 
 fn format_switch(ext: &str) -> &'static str {
@@ -109,6 +208,7 @@ fn list_archive(path: String, password: Option<String>) -> Result<Vec<ArchiveEnt
 
 #[tauri::command]
 fn compress_files(
+    window: tauri::Window,
     input_paths: Vec<String>,
     output_path: String,
     format: Option<String>,    // zip, 7z, tar, wim
@@ -118,7 +218,7 @@ fn compress_files(
 ) -> Result<String, String> {
     let fmt = format.unwrap_or_else(|| "zip".into());
     let switch = format_switch(&fmt);
-    let mut args: Vec<String> = vec!["a".into(), format!("-t{}", switch), output_path.clone()];
+    let mut args: Vec<String> = vec!["a".into(), "-bsp1".into(), format!("-t{}", switch), output_path.clone()];
 
     let lvl = level.unwrap_or(6);
     args.push(format!("-mx={}", lvl));
@@ -128,6 +228,9 @@ fn compress_files(
             args.push(format!("-p{}", pw));
             if switch == "zip" || switch == "7z" {
                 args.push("-mem=AES256".into());
+            }
+            if switch == "7z" {
+                args.push("-mhe=on".into()); // 加密文件名
             }
         }
     }
@@ -142,8 +245,7 @@ fn compress_files(
         args.push(ip.clone());
     }
 
-    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_7z(&str_args)?;
+    run_7z_streaming(&window, &args)?;
 
     let meta = std::fs::metadata(&output_path).map_err(|e| format!("无法读取输出文件: {}", e))?;
     Ok(serde_json::json!({ "path": output_path, "size": meta.len() }).to_string())
@@ -151,12 +253,103 @@ fn compress_files(
 
 #[tauri::command]
 fn extract_archive(
+    window: tauri::Window,
     archive_path: String,
     output_dir: String,
     password: Option<String>,
 ) -> Result<String, String> {
     std::fs::create_dir_all(&output_dir).map_err(|e| format!("无法创建目录: {}", e))?;
-    let mut args: Vec<String> = vec!["x".into(), archive_path, format!("-o{}", output_dir), "-y".into()];
+    let mut args: Vec<String> = vec!["x".into(), "-bsp1".into(), archive_path, format!("-o{}", output_dir), "-y".into()];
+    if let Some(ref pw) = password {
+        if !pw.is_empty() {
+            args.push(format!("-p{}", pw));
+        }
+    }
+    run_7z_streaming(&window, &args)?;
+    Ok(serde_json::json!({ "path": output_dir }).to_string())
+}
+
+// 测试压缩包完整性 (7z t)
+#[tauri::command]
+fn test_archive(
+    window: tauri::Window,
+    archive_path: String,
+    password: Option<String>,
+) -> Result<String, String> {
+    let mut args: Vec<String> = vec!["t".into(), "-bsp1".into(), archive_path];
+    if let Some(ref pw) = password {
+        if !pw.is_empty() {
+            args.push(format!("-p{}", pw));
+        }
+    }
+    let out = run_7z_streaming(&window, &args)?;
+    let ok = out.contains("Everything is Ok") || out.contains("No errors");
+    Ok(serde_json::json!({ "ok": ok, "detail": out.trim() }).to_string())
+}
+
+// 向已有压缩包追加文件 (7z a)
+#[tauri::command]
+fn add_to_archive(
+    window: tauri::Window,
+    archive_path: String,
+    input_paths: Vec<String>,
+    password: Option<String>,
+) -> Result<String, String> {
+    let mut args: Vec<String> = vec!["a".into(), "-bsp1".into(), archive_path.clone()];
+    if let Some(ref pw) = password {
+        if !pw.is_empty() {
+            args.push(format!("-p{}", pw));
+        }
+    }
+    for ip in &input_paths {
+        args.push(ip.clone());
+    }
+    run_7z_streaming(&window, &args)?;
+    let size = std::fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0);
+    Ok(serde_json::json!({ "path": archive_path, "size": size }).to_string())
+}
+
+// 从压缩包删除条目 (7z d)
+#[tauri::command]
+fn delete_from_archive(
+    window: tauri::Window,
+    archive_path: String,
+    entries: Vec<String>,
+    password: Option<String>,
+) -> Result<String, String> {
+    if entries.is_empty() {
+        return Err("未选择要删除的条目".into());
+    }
+    let mut args: Vec<String> = vec!["d".into(), "-bsp1".into(), archive_path.clone()];
+    if let Some(ref pw) = password {
+        if !pw.is_empty() {
+            args.push(format!("-p{}", pw));
+        }
+    }
+    for e in &entries {
+        args.push(e.clone());
+    }
+    run_7z_streaming(&window, &args)?;
+    let size = std::fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0);
+    Ok(serde_json::json!({ "path": archive_path, "size": size }).to_string())
+}
+
+// 解压单个条目到临时目录并用系统默认程序打开（预览）
+#[tauri::command]
+fn extract_and_open(
+    archive_path: String,
+    entry: String,
+    password: Option<String>,
+) -> Result<String, String> {
+    let tmp = std::env::temp_dir().join("uizip_preview");
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("无法创建临时目录: {}", e))?;
+    let mut args: Vec<String> = vec![
+        "x".into(),
+        archive_path,
+        format!("-o{}", tmp.to_string_lossy()),
+        entry.clone(),
+        "-y".into(),
+    ];
     if let Some(ref pw) = password {
         if !pw.is_empty() {
             args.push(format!("-p{}", pw));
@@ -164,7 +357,46 @@ fn extract_archive(
     }
     let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     run_7z(&str_args)?;
-    Ok(serde_json::json!({ "path": output_dir }).to_string())
+
+    let target = tmp.join(entry.replace('/', "\\"));
+    open_path(&target.to_string_lossy())
+}
+
+// 在文件资源管理器中定位文件
+#[tauri::command]
+fn reveal_in_explorer(path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // explorer 成功时也返回非 0，故不检查退出码
+        let _ = Command::new("explorer").arg(format!("/select,{}", path)).spawn();
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err("仅支持 Windows".into())
+    }
+}
+
+fn open_path(path: &str) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        // 用 explorer 以默认关联程序打开
+        Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("打开失败: {}", e))?;
+        Ok(path.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+fn open_file(path: String) -> Result<String, String> {
+    open_path(&path)
 }
 
 #[tauri::command]
@@ -194,7 +426,7 @@ fn list_files_in_dir(dir_path: String) -> Result<String, String> {
     }
     let p = std::path::Path::new(&dir_path);
     if !p.is_dir() {
-        return Err(format!("{} ?????", dir_path));
+        return Err(format!("{} 不是有效目录", dir_path));
     }
     walk(p, &mut files, p);
     Ok(serde_json::json!(files).to_string())
@@ -248,6 +480,12 @@ pub fn run() {
             list_archive,
             compress_files,
             extract_archive,
+            test_archive,
+            add_to_archive,
+            delete_from_archive,
+            extract_and_open,
+            reveal_in_explorer,
+            open_file,
             get_file_info,
             dialog_open,
             list_files_in_dir,
