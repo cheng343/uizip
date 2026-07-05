@@ -172,7 +172,7 @@ fn format_switch(ext: &str) -> &'static str {
 // ---- 同步实现（在后台线程运行） ----
 
 fn list_archive_impl(path: String, password: Option<String>) -> Result<Vec<ArchiveEntry>, String> {
-    let mut args: Vec<String> = vec!["l".into(), "-slt".into(), path.clone()];
+    let mut args: Vec<String> = vec!["l".into(), "-slt".into(), "-sccUTF-8".into(), path.clone()];
     if let Some(ref pw) = password {
         if !pw.is_empty() {
             args.push(format!("-p{}", pw));
@@ -216,7 +216,7 @@ fn list_archive_impl(path: String, password: Option<String>) -> Result<Vec<Archi
 fn compress_impl(window: &tauri::Window, input_paths: Vec<String>, output_path: String, format: Option<String>, level: Option<u8>, password: Option<String>, volume: Option<String>) -> Result<String, String> {
     let fmt = format.unwrap_or_else(|| "zip".into());
     let switch = format_switch(&fmt);
-    let mut args: Vec<String> = vec!["a".into(), "-bsp1".into(), format!("-t{}", switch), output_path.clone()];
+    let mut args: Vec<String> = vec!["a".into(), "-sccUTF-8".into(), "-bsp1".into(), format!("-t{}", switch), output_path.clone()];
 
     let lvl = level.unwrap_or(6);
     args.push(format!("-mx={}", lvl));
@@ -251,7 +251,7 @@ fn compress_impl(window: &tauri::Window, input_paths: Vec<String>, output_path: 
 
 fn extract_impl(window: &tauri::Window, archive_path: String, output_dir: String, password: Option<String>) -> Result<String, String> {
     std::fs::create_dir_all(&output_dir).map_err(|e| format!("无法创建目录: {}", e))?;
-    let mut args: Vec<String> = vec!["x".into(), "-bsp1".into(), archive_path, format!("-o{}", output_dir), "-y".into()];
+    let mut args: Vec<String> = vec!["x".into(), "-sccUTF-8".into(), "-bsp1".into(), archive_path, format!("-o{}", output_dir), "-y".into()];
     if let Some(ref pw) = password {
         if !pw.is_empty() {
             args.push(format!("-p{}", pw));
@@ -297,7 +297,7 @@ async fn extract_archive(
 #[tauri::command]
 async fn test_archive(window: tauri::Window, archive_path: String, password: Option<String>) -> Result<String, String> {
     spawn_blocking(move || {
-        let mut args: Vec<String> = vec!["t".into(), "-bsp1".into(), archive_path];
+        let mut args: Vec<String> = vec!["t".into(), "-sccUTF-8".into(), "-bsp1".into(), archive_path];
         if let Some(ref pw) = password { if !pw.is_empty() { args.push(format!("-p{}", pw)); } }
         let out = run_7z_streaming(&window, &args)?;
         let ok = out.contains("Everything is Ok") || out.contains("No errors");
@@ -309,7 +309,7 @@ async fn test_archive(window: tauri::Window, archive_path: String, password: Opt
 #[tauri::command]
 async fn add_to_archive(window: tauri::Window, archive_path: String, input_paths: Vec<String>, password: Option<String>) -> Result<String, String> {
     spawn_blocking(move || {
-        let mut args: Vec<String> = vec!["a".into(), "-bsp1".into(), archive_path.clone()];
+        let mut args: Vec<String> = vec!["a".into(), "-sccUTF-8".into(), "-bsp1".into(), archive_path.clone()];
         if let Some(ref pw) = password { if !pw.is_empty() { args.push(format!("-p{}", pw)); } }
         for ip in &input_paths { args.push(ip.clone()); }
         run_7z_streaming(&window, &args)?;
@@ -340,7 +340,7 @@ async fn extract_and_open(archive_path: String, entry: String, password: Option<
     spawn_blocking(move || {
         let tmp = std::env::temp_dir().join("uizip_preview");
         std::fs::create_dir_all(&tmp).map_err(|e| format!("无法创建临时目录: {}", e))?;
-        let mut args: Vec<String> = vec!["x".into(), archive_path, format!("-o{}", tmp.to_string_lossy()), entry.clone(), "-y".into()];
+        let mut args: Vec<String> = vec!["x".into(), "-sccUTF-8".into(), archive_path, format!("-o{}", tmp.to_string_lossy()), entry.clone(), "-y".into()];
         if let Some(ref pw) = password { if !pw.is_empty() { args.push(format!("-p{}", pw)); } }
         let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         run_7z(&str_args)?;
