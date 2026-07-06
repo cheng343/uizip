@@ -2,6 +2,7 @@
 import { useTheme } from "./theme";
 import { themeList, type ThemeId } from "./theme";
 import "./App.css";
+import { getLang, setLang as saveLang, locales, type Lang } from "./locale";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -91,12 +92,12 @@ function ProgressBar({ value, label }: { value: number; label: string }) {
 }
 
 // ---- Settings Panel ----
-function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+function SettingsPanel({ open, onClose, t }: { open: boolean; onClose: () => void; t: (k: string) => string }) {
   const { theme, setThemeId } = useTheme(); if (!open) return null;
   return (<div className="settings-overlay" onClick={onClose}><div className="settings-panel" onClick={e => e.stopPropagation()}>
-    <div className="settings-header"><h2>{'设置'}</h2><button className="close-btn" onClick={onClose}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button></div>
-    <section className="settings-section"><h3>{'主题'}</h3><div className="theme-grid">{themeList.map(t => (<button key={t.id} className={"theme-card " + (theme.id === t.id ? "active" : "")} onClick={() => setThemeId(t.id as ThemeId)} data-theme-card={t.id}><div className="theme-preview" data-theme-preview={t.id}><span className="preview-dot" /><span className="preview-bar" /></div><span className="theme-label">{t.label}</span></button>))}</div></section>
-    <section className="settings-section"><h3>{'关于'}</h3><p className="about-text">uiZip — 精美的 Windows 压缩工具。基于 Tauri + React，内置 7-Zip 引擎。</p></section>
+    <div className="settings-header"><h2>{t('settings')}</h2><button className="close-btn" onClick={onClose}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button></div>
+    <section className="settings-section"><h3>{t('theme')}</h3><div className="theme-grid">{themeList.map(t => (<button key={t.id} className={"theme-card " + (theme.id === t.id ? "active" : "")} onClick={() => setThemeId(t.id as ThemeId)} data-theme-card={t.id}><div className="theme-preview" data-theme-preview={t.id}><span className="preview-dot" /><span className="preview-bar" /></div><span className="theme-label">{t.label}</span></button>))}</div></section>
+    <section className="settings-section"><h3>{t('about')}</h3><p className="about-text">uiZip — 精美的 Windows 压缩工具。基于 Tauri + React，内置 7-Zip 引擎。</p></section>
   </div></div>);
 }
 
@@ -109,9 +110,9 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: { 
 }
 
 // ---- Archive Tree ----
-function TreeRows({ nodes, depth, expanded, toggleExpand, selected, toggleSelect, onOpen }: {
+function TreeRows({ nodes, depth, expanded, toggleExpand, selected, toggleSelect, onOpen, t }: {
   nodes: TreeNode[]; depth: number; expanded: Set<string>; toggleExpand: (f: string) => void;
-  selected: Set<string>; toggleSelect: (n: TreeNode) => void; onOpen: (n: TreeNode) => void;
+  selected: Set<string>; toggleSelect: (n: TreeNode) => void; onOpen: (n: TreeNode) => void; t: (k: string) => string;
 }) {
   return (<>{nodes.map(n => {
     const files: string[] = []; collectFiles(n, files);
@@ -131,10 +132,10 @@ function TreeRows({ nodes, depth, expanded, toggleExpand, selected, toggleSelect
         <span className="tree-size">{n.isDir ? "" : fmtSize(n.size)}</span>
         <span className="tree-compressed">{n.isDir ? "" : fmtSize(n.compressed)}</span>
         <span className="tree-actions">
-          {!n.isDir && <button className="tree-act" title={'预览 / 打开'} onClick={e => { e.stopPropagation(); onOpen(n); }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg></button>}
+          {!n.isDir && <button className="tree-act" title={t('preview_open')} onClick={e => { e.stopPropagation(); onOpen(n); }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg></button>}
         </span>
       </div>
-      {n.isDir && isOpen && n.children.length > 0 && <TreeRows nodes={n.children} depth={depth + 1} expanded={expanded} toggleExpand={toggleExpand} selected={selected} toggleSelect={toggleSelect} onOpen={onOpen} />}
+      {n.isDir && isOpen && n.children.length > 0 && <TreeRows nodes={n.children} depth={depth + 1} expanded={expanded} toggleExpand={toggleExpand} selected={selected} toggleSelect={toggleSelect} onOpen={onOpen} t={t} />}
     </div>);
   })}</>);
 }
@@ -142,6 +143,9 @@ function TreeRows({ nodes, depth, expanded, toggleExpand, selected, toggleSelect
 // ---- Main App ----
 export default function App() {
   const { theme, toggleDark } = useTheme();
+  const [lang, setLangState] = useState<Lang>(getLang);
+  const switchLang = useCallback((l: Lang) => { setLangState(l); saveLang(l); }, []);
+  const t = useCallback((key: string) => locales[lang][key] ?? key, [lang]);
   const [mode, setMode] = useState<Mode>("compress");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [outputDir, setOutputDir] = useState("");
@@ -351,18 +355,19 @@ const handlePaths = useCallback(async (paths: string[]) => {
               ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="5" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
               : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>}
           </button>
-          <button className="settings-btn" onClick={() => setSettingsOpen(true)} title={'设置'}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg></button>
+          <button className="settings-btn" onClick={() => switchLang(lang === "zh" ? "en" : "zh")} title={lang === "zh" ? "English" : "中文"} style={{fontSize:12,fontWeight:700}}>{lang === "zh" ? "EN" : "中文"}</button>
+          <button className="settings-btn" onClick={() => setSettingsOpen(true)} title={t('settings')}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg></button>
         </div>
       </div>
       {/* Tabs */}
       <div className="mode-tabs">
         <button className={"mode-tab " + (mode === "compress" ? "active" : "")} onClick={() => setMode("compress")}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
-          {'压缩'}
+          {t('compress')}
         </button>
         <button className={"mode-tab " + (mode === "extract" ? "active" : "")} onClick={() => setMode("extract")}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
-          {'解压'}
+          {t('extract')}
         </button>
       </div>
       {/* Content */}
@@ -371,13 +376,13 @@ const handlePaths = useCallback(async (paths: string[]) => {
           {/* Settings bar */}
           <div className="settings-bar">
             <div className="settings-row">
-              <label className="sbar-label">{'格式'}</label>
+              <label className="sbar-label">{t('format')}</label>
               <select className="sbar-select" value={compFormat} onChange={e => setCompFormat(e.target.value as ArchiveFormat)}>
                 {(Object.keys(FORMAT_LABELS) as ArchiveFormat[]).map(f => <option key={f} value={f}>{FORMAT_LABELS[f]}</option>)}
               </select>
             </div>
             <div className="settings-row">
-              <label className="sbar-label">{'级别'}</label>
+              <label className="sbar-label">{t('level')}</label>
               <div className="sbar-levels">
                 {LEVELS.map(l => (
                   <button key={l.value} className={"sbar-lvl " + (compLevel === l.value ? "active" : "")} onClick={() => setCompLevel(l.value)} title={l.hint}>{l.label}</button>
@@ -385,9 +390,9 @@ const handlePaths = useCallback(async (paths: string[]) => {
               </div>
             </div>
             <div className="settings-row">
-              <label className="sbar-label">{'密码'}</label>
+              <label className="sbar-label">{t('password')}</label>
               <div className="sbar-pw">
-                <input className="sbar-input" type={showCompPassword ? "text" : "password"} value={compPassword} onChange={e => setCompPassword(e.target.value)} placeholder={'可选'} style={{width: 110}} />
+                <input className="sbar-input" type={showCompPassword ? "text" : "password"} value={compPassword} onChange={e => setCompPassword(e.target.value)} placeholder={t('optional')} style={{width: 110}} />
                 <button className="sbar-icon" onClick={() => setShowCompPassword(v => !v)} title={'显示'}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     {showCompPassword ? <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></> : <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>}
@@ -396,14 +401,14 @@ const handlePaths = useCallback(async (paths: string[]) => {
               </div>
             </div>
             <div className="settings-row">
-              <label className="sbar-label">{'分卷'}</label>
-              <input className="sbar-input" value={volume} onChange={e => setVolume(e.target.value)} placeholder={'如 100M'} style={{width: 90}} />
+              <label className="sbar-label">{t('volume')}</label>
+              <input className="sbar-input" value={volume} onChange={e => setVolume(e.target.value)} placeholder={t('eg_100M')} style={{width: 90}} />
             </div>
             <div className="settings-row sbar-grow">
-              <label className="sbar-label">{'保存到'}</label>
+              <label className="sbar-label">{t('save_to')}</label>
               <div className="sbar-path">
-                <input className="sbar-input sbar-flex" value={outputDir} readOnly onClick={pickOutputDir} placeholder={'点击选择目录...'} />
-                <button className="sbar-icon" onClick={pickOutputDir} title={'浏览'}>
+                <input className="sbar-input sbar-flex" value={outputDir} readOnly onClick={pickOutputDir} placeholder={t('click_select')} />
+                <button className="sbar-icon" onClick={pickOutputDir} title={t('browse')}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                 </button>
               </div>
@@ -413,25 +418,25 @@ const handlePaths = useCallback(async (paths: string[]) => {
           <div className={"dropzone " + (dragover ? "dragover" : "") + (files.length === 0 ? " empty" : "")}>
             {files.length === 0 ? (<div className="dropzone-hint">
               <svg className="dropzone-icon-svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              <p>{'拖拽文件到此处'}</p>
+              <p>{t('drop_files_here')}</p>
               <p className="sub">{'或点击下方“添加文件”或“添加文件夹”'}</p>
             </div>) : (<div className="file-list">
-              <div className="file-list-header"><span className="col-name">{'文件名'}</span><span className="col-size">{'大小'}</span><span className="col-action"></span></div>
+              <div className="file-list-header"><span className="col-name">{t('filename')}</span><span className="col-size">{t('size')}</span><span className="col-action"></span></div>
               {files.map(f => (<div key={f.id} className="file-row" onContextMenu={e => onFileCtx(e, f)}><span className="col-name"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>{f.name}</span><span className="col-size">{fmtSize(f.size)}</span><span className="col-action"><button className="remove-btn" onClick={() => removeFile(f.id)}><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span></div>))}
             </div>)}
           </div>
           {/* Action bar */}
           <footer className="action-bar">
-            {compressing ? <ProgressBar value={progress ?? 0} label={'压缩中'} /> : (<>
+            {compressing ? <ProgressBar value={progress ?? 0} label={t('compressing')} /> : (<>
               <div className="action-info">
                 <span>{files.length} {'个文件 · '}{fmtSize(totalSize)}</span>
-                {ratio && <span className="ratio">{' · 减小 '}{ratio}%</span>}
+                {ratio && <span className="ratio">{t('reduced')}{ratio}%</span>}
                 {compError && <span className="error-msg">{compError}</span>}
               </div>
               <div className="action-buttons">
-                <button className="btn btn-outline" onClick={addFiles}>{'添加文件'}</button>
-                <button className="btn btn-outline" onClick={addFolders}>{'添加文件夹'}</button>
-                {files.length > 0 && <button className="btn btn-outline" onClick={clearAll}>{'清空'}</button>}
+                <button className="btn btn-outline" onClick={addFiles}>{t('add_files')}</button>
+                <button className="btn btn-outline" onClick={addFolders}>{t('add_folders')}</button>
+                {files.length > 0 && <button className="btn btn-outline" onClick={clearAll}>{t('clear')}</button>}
                 {files.length > 0 && <button className="btn btn-primary" onClick={compressAll} disabled={compressing}>{compressing ? '压缩中...' : compDone ? '完成' : '开始压缩'}</button>}
               </div>
             </>)}
@@ -441,24 +446,24 @@ const handlePaths = useCallback(async (paths: string[]) => {
           <div className="extract-panel" style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12, overflow: "hidden" }}>
             {/* Open + toolbar */}
             <div className="extract-pick-area" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <button className="btn btn-primary" onClick={openArchive}>{'打开压缩包'}</button>
+              <button className="btn btn-primary" onClick={openArchive}>{t('open_archive')}</button>
               {archivePath && <span className="archive-path-label">{basename(archivePath)}</span>}
               {archiveEntries.length > 0 && (<div className="arch-toolbar">
-                <button className="btn btn-outline btn-sm" onClick={testArchive} disabled={busy}>{'完整性测试'}</button>
-                <button className="btn btn-outline btn-sm" onClick={addToArchive} disabled={busy}>{'追加文件'}</button>
-                <button className="btn btn-outline btn-sm" onClick={deleteSelected} disabled={busy || selected.size === 0}>{'删除所选'}{selected.size > 0 ? ' (' + selected.size + ')' : ''}</button>
+                <button className="btn btn-outline btn-sm" onClick={testArchive} disabled={busy}>{t('test_integrity')}</button>
+                <button className="btn btn-outline btn-sm" onClick={addToArchive} disabled={busy}>{t('add_to_archive')}</button>
+                <button className="btn btn-outline btn-sm" onClick={deleteSelected} disabled={busy || selected.size === 0}>{t('delete_selected')}{selected.size > 0 ? ' (' + selected.size + ')' : ''}</button>
               </div>)}
             </div>
             {/* Archive tree */}
             {archiveEntries.length > 0 && (<>
               <div className="archive-stats">
-                <span>{archiveEntries.length} {'个条目'}</span>
-                <span>{' · 原始 '}{fmtSize(archTotalSize)}</span>
-                <span className="ratio">{' · 压缩 '}{fmtSize(archTotalCompressed)}</span>
+                <span>{archiveEntries.length} {t('entries_count')}</span>
+                <span>{t('original')}{fmtSize(archTotalSize)}</span>
+                <span className="ratio">{t('compressed')}{fmtSize(archTotalCompressed)}</span>
               </div>
               <div className="file-list tree-list" style={{ flex: 1, overflow: "auto" }}>
-                <div className="file-list-header tree-header"><span className="tree-h-name">{'名称'}</span><span className="tree-h-size">{'大小'}</span><span className="tree-h-comp">{'压缩后'}</span><span className="tree-h-act" /></div>
-                <TreeRows nodes={tree} depth={0} expanded={expanded} toggleExpand={toggleExpand} selected={selected} toggleSelect={toggleSelect} onOpen={openEntry} />
+                <div className="file-list-header tree-header"><span className="tree-h-name">{t('name')}</span><span className="tree-h-size">{t('size')}</span><span className="tree-h-comp">{t('after_compress')}</span><span className="tree-h-act" /></div>
+                <TreeRows nodes={tree} depth={0} expanded={expanded} toggleExpand={toggleExpand} selected={selected} toggleSelect={toggleSelect} onOpen={openEntry} t={t} />
               </div>
             </>)}
             {/* Extract controls */}
@@ -466,19 +471,19 @@ const handlePaths = useCallback(async (paths: string[]) => {
               {busy ? <ProgressBar value={progress ?? 0} label={busyOp === "test" ? '测试中' : busyOp === "add" ? '追加中' : busyOp === "delete" ? '删除中' : '解压中'} /> : (<>
                 <div className="extract-options">
                   <div className="ext-input-row">
-                    <span className="ext-label">{'解压到:'}</span>
+                    <span className="ext-label">{t('extract_to')}</span>
                     <input className="ext-input" value={extractDir} onChange={e => setExtractDir(e.target.value)} />
                     <button className="btn btn-sm" onClick={pickExtractDir}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg></button>
                   </div>
                   <div className="ext-pw-row">
                     <span className="ext-label">{'密码:'}</span>
-                    <input className="ext-input" type={showExtractPassword ? "text" : "password"} value={extractPassword} onChange={e => setExtractPassword(e.target.value)} placeholder={'可选'} style={{ width: 140, flex: "none" }} />
+                    <input className="ext-input" type={showExtractPassword ? "text" : "password"} value={extractPassword} onChange={e => setExtractPassword(e.target.value)} placeholder={t('optional')} style={{ width: 140, flex: "none" }} />
                     <button className="btn btn-sm icon-only" onClick={() => setShowExtractPassword(v => !v)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{showExtractPassword ? <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" /><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></> : <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>}</svg></button>
                   </div>
                 </div>
                 <div className="action-buttons" style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
                   <button className="btn btn-primary" onClick={doExtract} disabled={busy || !extractDir}>{extracting ? '解压中...' : extractDone ? '完成' : '解压全部'}</button>
-                  {extractDone && <button className="btn btn-outline btn-sm" onClick={() => tauriReveal(extractDir)}>{'打开目录'}</button>}
+                  {extractDone && <button className="btn btn-outline btn-sm" onClick={() => tauriReveal(extractDir)}>{t('open_dir')}</button>}
                   {extractError && <span className="error-msg">{extractError}</span>}
                 </div>
               </>)}
@@ -487,14 +492,14 @@ const handlePaths = useCallback(async (paths: string[]) => {
             {!archivePath && archiveEntries.length === 0 && (<div className={"dropzone empty" + (dragover ? " dragover" : "")} style={{ flex: 1 }}>
               <div className="dropzone-hint">
                 <svg className="dropzone-icon-svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
-                <p>{'拖拽压缩包到此处'}</p>
+                <p>{t('drop_archive_here')}</p>
                 <p className="sub">{'或点击上方“打开压缩包”'}</p>
               </div>
             </div>)}
           </div>
         </div>)}
       </main>
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} t={t} />
       {ctxMenu && <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} items={ctxMenu.items} />}
     </div>
   );
